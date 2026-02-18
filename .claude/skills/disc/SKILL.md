@@ -488,6 +488,29 @@ Swap this section to change the target language/framework. All language-specific
 | Mock field (collaborator) | camelCase of interface name | `orderMapper` |
 | Mock field (data) | Variable name from return label. Type from explicit `: Type` or PascalCase inference | `savedOrder : Order` → field: `Order savedOrder` |
 
+### Domain Type Rule — Abstractions Depend on Abstractions
+
+Any type that appears in an interface method signature (parameter or return type)
+and represents a **domain concept** is itself generated as an **interface**, not a class.
+
+This enforces Dependency Inversion Principle part B: abstractions should not depend
+on details.
+
+**Rule:** When a return label or parameter names a domain type, generate it as an interface:
+- `Order.java` → `public interface Order {}`
+- Do NOT generate `DefaultOrder.java` — the concrete class is a human concern
+  (its fields and persistence mapping are domain/infra decisions DisC cannot make)
+
+**Exceptions — NOT domain types, leave as-is:**
+| Type category | Examples | Reason |
+|---|---|---|
+| Java standard primitives/wrappers | `UUID`, `String`, `Integer`, `Long`, `Boolean` | Not invented by the domain |
+| Java standard generics | `Optional<T>`, `List<T>`, `Map<K,V>`, `Set<T>` | Standard library |
+| Framework types | Spring, JPA types | External contract |
+| `*Request`, `*Response`, `*DTO` | `CreateOrderRequest`, `ProductDTO` | Boundary data carriers — structure IS the contract |
+
+**Effect on tests:** No change. `@Mock private Order order;` mocks interfaces natively.
+
 ### Package Placement
 
 | Suffix | Package | Example |
@@ -607,7 +630,13 @@ All rules for creating vs. updating files live here. The router references this 
 
 Before generating anything, check if target files already exist.
 
-**Step 1: Derive target file paths** from UML participant names using the language_profile file paths rules.
+**Step 1: Derive target file paths** from two sources:
+- **Participant names** — using the language_profile file paths rules (as before)
+- **Domain types from return labels** — any type extracted from dashed return arrows
+  that is a domain type (per the Domain Type Rule in language_profile) also gets a
+  file path derived and checked. Use `com.disc.demo.entity` as the package.
+
+Collect ALL target files before proceeding to Step 2.
 
 **Step 2: Check for pre-existing files** using Glob. For each file, record: **EXISTS** or **NEW**.
 
@@ -639,6 +668,11 @@ Before generating anything, check if target files already exist.
 | Interface | New method signature(s) only. Skip if already present. | Existing method signatures |
 | Test | New `@Nested` class (after last existing) + new `@Mock` fields only if not already declared | Existing `@Nested`, `@Test`, `@Mock`, setup code |
 | Implementation | New method + new `private final` fields + new constructor params (if new collaborator) | Existing methods, logging, annotations, comments |
+| Domain type interface (EXISTS) | Nothing — skip. Never overwrite. | All existing content |
+
+> **Domain type EXISTS as a class:** Do not convert it to an interface. Add a warning
+> comment in the Step 5 report: "⚠️ `[TypeName].java` exists as a class — consider
+> converting to an interface to satisfy DIP."
 
 ### Writing Files
 
