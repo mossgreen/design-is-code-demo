@@ -30,9 +30,6 @@ UML Sequence Diagram
   Phase 1: UML → Tests  (each arrow = one verify() test)
         |
         v
-  Human check: arrows == verify() calls? Design held.
-        |
-        v
   Phase 2: Tests → Implementation  (reads tests only, never UML)
         |
         v
