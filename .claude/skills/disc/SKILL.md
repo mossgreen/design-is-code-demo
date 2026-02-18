@@ -1,6 +1,7 @@
 ---
 name: disc
 description: "Transform UML sequence diagrams into working Java code using the DisC (Design is Code) methodology: first generate tests from UML, then derive implementation from the tests."
+disable-model-invocation: true
 ---
 
 You are executing the DisC (Design is Code) methodology. Transform the provided UML sequence diagram into working Java code: first generate tests from the UML, then derive implementation from the tests.
