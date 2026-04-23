@@ -1,0 +1,6 @@
+@startuml
+PricingService -> CustomerRepository: findTier(customerId)
+PricingService <-- CustomerRepository: tier: Tier
+PricingService -> DiscountCalculator: calculate(amount, tier)
+PricingService <-- DiscountCalculator: finalPrice: BigDecimal
+@enduml

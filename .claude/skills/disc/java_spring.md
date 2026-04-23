@@ -19,15 +19,21 @@ All Java/Spring-specific conventions, templates, and examples for the DisC metho
 
 ## Naming Conventions
 
-| Element | Convention | Example |
-|---|---|---|
-| Interface | PascalCase, from participant name | `OrderService` |
-| Implementation class | `Default` + interface name | `DefaultOrderService` |
-| Test class | Implementation name + `Test` | `DefaultOrderServiceTest` |
-| Test method | `should` + verb phrase describing interaction | `shouldSaveOrder` |
-| Mock field (collaborator) | camelCase of interface name | `orderMapper` |
+By default, the participant name is the interface name. 
+If the participant uses a colon (e.g., `PriorityOrderService: OrderService`), the left side is the implementation name and the right side is the interface name. 
+If no implementation name is defined, use `Default` + interface name.
+
+| Element | Convention | Example                                   |
+|---|---|-------------------------------------------|
+| Interface | PascalCase, from participant name (or right of `:`) | `OrderService` |
+| Implementation class | Left of `:` if defined, otherwise `Default` + interface name | `PriorityOrderService` or `DefaultOrderService`|
+| Test class | Implementation name + `Test` | `PriorityOrderServiceTest`                        |
+| Test method | `should` + verb phrase describing interaction | `shouldSaveOrder`                         |
+| Mock field (collaborator) | camelCase of interface name | `orderMapper`                             |
 | Mock field (data) | Variable name from return label. Type from explicit `: Type` or PascalCase inference | `savedOrder : Order` → field: `Order savedOrder` |
 
+The interface name will be referenced as "InterfaceName"
+the implementation name will be referenced as "ImplementationName"
 ---
 
 ## Package Placement
@@ -52,9 +58,9 @@ If a suffix doesn't match any rule, use `{basePackage}.service` as the default.
 
 | Element | Path |
 |---|---|
-| Interface | `src/main/java/{basePackagePath}/[package]/[Name].java` |
-| Implementation | `src/main/java/{basePackagePath}/[package]/Default[Name].java` |
-| Test | `src/test/java/{basePackagePath}/[package]/Default[Name]Test.java` |
+| Interface | `src/main/java/{basePackagePath}/[package]/[InterfaceName].java` |
+| Implementation | `src/main/java/{basePackagePath}/[package]/[ImplementationName].java` |
+| Test | `src/test/java/{basePackagePath}/[package]/[ImplementationName]Test.java` |
 | Domain type | `src/main/java/{basePackagePath}/entity/[Type].java` |
 
 ---
@@ -92,18 +98,18 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @MockitoSettings(strictness = Strictness.LENIENT)
-class Default[ServiceName]Test {
+class [ImplementationName]Test {
 
     @Mock private [Collaborator1] [collaborator1];
     @Mock private [Collaborator2] [collaborator2];
     @Mock private [InputType] [input];
     @Mock private [ReturnType1] [returnValue1];
     private [FinalReturnType] result;
-    Default[ServiceName] default[ServiceName];
+    [InterfaceName] [implementationName];
 
     @BeforeEach
     void setUp() {
-        default[ServiceName] = new Default[ServiceName]([collaborator1], [collaborator2]);
+        [implementationName] = new [ImplementationName]([collaborator1], [collaborator2]);
     }
 
     @Nested
@@ -111,7 +117,7 @@ class Default[ServiceName]Test {
         @BeforeEach
         void setUp() {
             when([collaborator].method(any())).thenReturn([returnValue]);
-            result = default[ServiceName].[methodName]([input]);
+            result = [implementationName].[methodName]([input]);
         }
 
         @Test void should[DescribeInteraction]() { verify([collaborator]).[method]([expectedArg]); }
@@ -138,11 +144,11 @@ package {basePackage}.service;
 import org.springframework.stereotype.Service;
 
 @Service
-public class Default[ServiceName] implements [ServiceName] {
+public class [ImplementationName] implements [InterfaceName] {
     private final [Collaborator1] [collaborator1];
     private final [Collaborator2] [collaborator2];
 
-    public Default[ServiceName]([Collaborator1] [collaborator1], [Collaborator2] [collaborator2]) {
+    public [ImplementationName]([Collaborator1] [collaborator1], [Collaborator2] [collaborator2]) {
         this.[collaborator1] = [collaborator1];
         this.[collaborator2] = [collaborator2];
     }
@@ -186,12 +192,16 @@ public class Default[ServiceName] implements [ServiceName] {
 
 ---
 
-## Decision Table Skeleton (computational `leaf_node`)
+## Decision Table (pure function `leaf_node`)
+
+A pure-function leaf is tested either from a **skeleton** (no `decision_table_file` attached) or from **filled rows** (a `<Participant>.decision.md` exists in `design/` and pairs with this leaf).
+
+### Skeleton mode (no `decision_table_file`)
 
 ```java
-class Default[LeafNodeName]Test {
+class [ImplementationName]Test {
 
-    private [LeafNodeName] [instance] = new Default[LeafNodeName]();
+    private [InterfaceName] [instance] = new [ImplementationName]();
 
     // TODO: Human must fill in the decision table.
     // DisC CANNOT dictate the implementation of pure functions.
@@ -208,6 +218,77 @@ class Default[LeafNodeName]Test {
     }
 }
 ```
+
+### Filled mode (`decision_table_file` attached)
+
+Input file: `design/<Participant>.decision.md` with YAML frontmatter + markdown table.
+
+```markdown
+---
+target: ProductMapper.toEntity
+input:
+  request.name: String
+  request.price: BigDecimal
+output: Product
+---
+
+| request.name | request.price | expected.name | expected.price |
+|---|---|---|---|
+| "Widget"     | 10.00         | "Widget"      | 10.00          |
+| "  Item  "   | 5.00          | "Item"        | 5.00           |
+| ""           | 10.00         | throws: IllegalArgumentException |  |
+```
+
+**Frontmatter fields:**
+- `target: <Class>.<method>` — required. Names the participant and call_arrow in the UML this table specifies.
+- `input:` — required. Map of column name → type for every input column.
+- `output:` — required. Return type of the target method (or the object type when output columns are `expected.<field>`).
+- `config:` — optional. Free-form key/value pairs that pin choices DisC would otherwise infer (e.g., `rounding: HALF_UP`, `scale: 2`, `locale: en-US`).
+
+**Row conventions:**
+- String literals quoted: `"Widget"`. Whitespace inside the quotes is meaningful.
+- Numeric literals unquoted: `10.00`, `-50`.
+- Exception rows: output cell is `throws: <ExceptionType>` or `throws: <ExceptionType>: "<message>"`. Other `expected.*` cells are ignored.
+
+**Generated test file:**
+
+```java
+@MockitoSettings(strictness = Strictness.LENIENT)
+class DefaultProductMapperTest {
+
+    private ProductMapper productMapper = new DefaultProductMapper();
+
+    @Test
+    void shouldMapWidget() {
+        CreateProductRequest request = new CreateProductRequest("Widget", new BigDecimal("10.00"));
+        Product result = productMapper.toEntity(request);
+        assertThat(result.getName()).isEqualTo("Widget");
+        assertThat(result.getPrice()).isEqualByComparingTo(new BigDecimal("10.00"));
+    }
+
+    @Test
+    void shouldTrimItem() {
+        CreateProductRequest request = new CreateProductRequest("  Item  ", new BigDecimal("5.00"));
+        Product result = productMapper.toEntity(request);
+        assertThat(result.getName()).isEqualTo("Item");
+        assertThat(result.getPrice()).isEqualByComparingTo(new BigDecimal("5.00"));
+    }
+
+    @Test
+    void shouldRejectEmptyName() {
+        CreateProductRequest request = new CreateProductRequest("", new BigDecimal("10.00"));
+        assertThatThrownBy(() -> productMapper.toEntity(request))
+            .isInstanceOf(IllegalArgumentException.class);
+    }
+}
+```
+
+**Filled-mode rules:**
+- One `@Test` per row. Test method names are humanised from row content.
+- No `@Mock` on declared input types — construct real instances using declared types from `input:`.
+- Primitives and final classes (`UUID`, `Integer`, `String`, `BigDecimal`) always use real values.
+- Exception rows use `assertThatThrownBy`. When the row specifies a message, chain `.hasMessage(...)`.
+- No TODO markers. Every row is concrete.
 
 ---
 
@@ -231,9 +312,9 @@ ProductResponseFactory --> ProductService: singleProductResponse
 
 **Step 2:**
 - `ProductService` → `component_under_test`
-- `ProductMapper` → `leaf_node` (computational — Mapper)
-- `ProductRepository` → `leaf_node` (I/O boundary — Repository)
-- `ProductResponseFactory` → `leaf_node` (computational — Factory)
+- `ProductMapper` → `leaf_node` (pure function — Mapper)
+- `ProductRepository` → `leaf_node` (side effect — Repository)
+- `ProductResponseFactory` → `leaf_node` (factory — no standalone test)
 - 4 `interaction`s, all with `return_arrow`s
 - `data_pipe`s: `product` → `save` → `savedProduct` → `toDTO` → `productDto` → `createSingleResponse`
 
@@ -288,7 +369,7 @@ class DefaultProductServiceTest {
 
 **Step 6:** Read tests → derive implementation. Each `verify()` → one method call. Pipes flow through.
 
-**Step 8:** 4 arrows, 0 orchestrator collaborators, 2 computational leaf nodes, 5 tests, all files CREATE.
+**Step 8:** 4 arrows, 0 orchestrator collaborators, 3 leaf nodes (1 pure function, 1 side effect, 1 factory), 5 tests, all files CREATE.
 
 ---
 
@@ -545,3 +626,118 @@ when(productService.getProductByIds(any())).thenReturn(List.of(product));
 - Primitives and final classes (`UUID`, `Integer`, `String`) use real values, not mocks
 - Each `call_arrow` inside the `loop_block` still produces one `verify_test`
 - In implementation, the `loop_block` becomes iteration (`.forEach()` or `.stream()`)
+
+---
+
+## Example: UML + Decision Table (Pure function leaf filled from `design/`)
+
+Demonstrates the paired mode: a UML defines orchestration; a `decision_table_file` defines the `pure function` leaf's behaviour. DisC generates filled tests (not a skeleton) and derives implementation from the rows.
+
+**UML Input** (`design/CreateProduct.puml`):
+```
+ProductService -> ProductMapper: toEntity(createProductRequest)
+ProductMapper --> ProductService: product
+ProductService -> ProductRepository: save(product)
+ProductRepository --> ProductService: savedProduct : Product
+```
+
+**Decision Table Input** (`design/ProductMapper.decision.md`):
+```markdown
+---
+target: ProductMapper.toEntity
+input:
+  request.name: String
+  request.price: BigDecimal
+output: Product
+---
+
+| request.name | request.price | expected.name | expected.price |
+|---|---|---|---|
+| "Widget"     | 10.00         | "Widget"      | 10.00          |
+| "  Item  "   | 5.00          | "Item"        | 5.00           |
+| ""           | 10.00         | throws: IllegalArgumentException |  |
+```
+
+**Step 1:** Validate both inputs. UML has 2 `call_arrow`s. Decision table has well-formed frontmatter, 3 rows.
+
+**Step 2:** Classify.
+- `ProductService` → `component_under_test`
+- `ProductMapper` → `leaf_node` (pure function)
+- `ProductRepository` → `leaf_node` (side effect)
+- Pair `ProductMapper.decision.md` with `ProductMapper.toEntity` → mark the leaf **filled**.
+
+**Step 4:** Generate.
+
+Orchestration test for `ProductService` — standard mockist style from UML (one `verify_test` per `call_arrow`).
+
+Filled leaf test for `ProductMapper`:
+
+```java
+class DefaultProductMapperTest {
+
+    private ProductMapper productMapper = new DefaultProductMapper();
+
+    @Test
+    void shouldMapWidget() {
+        CreateProductRequest request = new CreateProductRequest("Widget", new BigDecimal("10.00"));
+        Product result = productMapper.toEntity(request);
+        assertThat(result.getName()).isEqualTo("Widget");
+        assertThat(result.getPrice()).isEqualByComparingTo(new BigDecimal("10.00"));
+    }
+
+    @Test
+    void shouldTrimItem() {
+        CreateProductRequest request = new CreateProductRequest("  Item  ", new BigDecimal("5.00"));
+        Product result = productMapper.toEntity(request);
+        assertThat(result.getName()).isEqualTo("Item");
+        assertThat(result.getPrice()).isEqualByComparingTo(new BigDecimal("5.00"));
+    }
+
+    @Test
+    void shouldRejectEmptyName() {
+        CreateProductRequest request = new CreateProductRequest("", new BigDecimal("10.00"));
+        assertThatThrownBy(() -> productMapper.toEntity(request))
+            .isInstanceOf(IllegalArgumentException.class);
+    }
+}
+```
+
+**Step 5:** Quality Gate. Row density note: 3 rows, one exception case. No note about missing zero/negative because the input is a name, not numeric. Adequate.
+
+**Step 6:** Implement. Reading the filled tests:
+- Row 1 requires field copy.
+- Row 2 requires `.trim()` on the name.
+- Row 3 requires rejection of empty name after trimming.
+
+No rule beyond the rows is forced. No `inferred_assumption` recorded.
+
+```java
+@Component
+public class DefaultProductMapper implements ProductMapper {
+
+    @Override
+    public Product toEntity(CreateProductRequest request) {
+        String name = request.getName().trim();
+        if (name.isEmpty()) {
+            throw new IllegalArgumentException("Product name must not be empty");
+        }
+        Product product = new Product();
+        product.setName(name);
+        product.setPrice(request.getPrice());
+        return product;
+    }
+}
+```
+
+**Step 8 report:**
+```
+Arrows:          2 call_arrows parsed
+Orchestrators:   1 (ProductService)
+Leaf nodes:      2 total (1 pure function, 1 side effect, 0 factory)
+Decision tables: 1 filled from decision_table_file, 0 skeletons
+Tests:           2 verify_tests + 1 result_test + 3 filled leaf tests = 6 total
+```
+
+No `inferred_assumption` block (rows uniquely determined the rule). No row-density notes.
+
+3 `call_arrow`s worth + 3 filled rows = 6 tests total across both files.
