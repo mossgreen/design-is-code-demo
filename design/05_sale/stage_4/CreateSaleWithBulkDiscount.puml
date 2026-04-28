@@ -1,0 +1,12 @@
+@startuml
+SaleService -> ProductRepository: findByIds(productIds)
+SaleService <-- ProductRepository: products : List<Product>
+loop for each lineItem in saleRequest.lineItems
+    SaleService -> LineSubtotalCalculator: calculate(lineItem.quantity, product.price)
+    SaleService <-- LineSubtotalCalculator: lineSubtotal : BigDecimal
+    SaleService -> BulkDiscountCalculator: calculate(lineItem.quantity, lineSubtotal)
+    SaleService <-- BulkDiscountCalculator: lineDiscount : BigDecimal
+end
+SaleService -> SaleResponseFactory: createWithBulkDiscount(saleRequest, products, lineSubtotals, lineDiscounts, totalDiscount, saleTotal)
+SaleService <-- SaleResponseFactory: saleResponse : SaleResponseWithDiscount
+@enduml

@@ -1,42 +1,37 @@
 ---
 name: disc
-description: "Transform UML sequence diagrams into working code using the DisC methodology"
+description: "Local testing version. Transform a precise design (UML sequence diagrams and decision tables) into working code using the DisC methodology"
 disable-model-invocation: true
 ---
 
-You are executing the DisC (Design is Code) methodology. Transform the provided UML sequence diagram into working code: first generate tests from the UML, then derive implementation from the tests.
+You are executing the DisC (Design is Code) methodology. Transform the provided precise design (UML sequence diagrams and decision tables) into working code: first generate tests from the design, then derive implementation from the tests.
 
 ## Context
 
-AI generates code in seconds. Humans review code in hours. This asymmetry means AI produces faster than humans can verify — and unverified code is a liability. DisC solves this: the UML is a contract. Each arrow becomes a test. Tests force implementation structure. The human need near zero code review.
+In DisC, the design is the source. Tests are derived from the design. Implementation is derived from the tests. Code is never written directly — it is the last link in a deterministic chain that begins with a human-authored design.
+
+Two kinds of design feed this chain. **Sequence diagrams** specify how orchestrators call collaborators — the structure of behaviour. **Decision tables** specify what pure functions return — the result of behaviour. Each kind has its own deterministic transformation, but both obey the same rule: every element of the design produces exactly one test, and the implementation is whatever makes those tests pass.
 
 **What DisC controls:**
-DisC constrains **how orchestrators call collaborators** — call order, arguments, data flow.
-It does NOT constrain **how pure functions compute their results** — only that they produce correct output for human-designed inputs.
-
-**What DisC does NOT guarantee:**
-DisC verifies the design contract. It does NOT verify runtime correctness (a real repository throwing, a real mapper transforming incorrectly). 
-Runtime correctness requires integration tests. DisC and integration tests are complementary, not substitutes.
+DisC pins the contract — call order, arguments, and data flow for orchestrators; input-output behaviour for pure functions with a filled decision table.
 
 **The two invariants** — every other rule derives from these:
 
-1. **Arrow = Test.** Every `call_arrow` in the UML becomes exactly one `verify_test`. The count of `call_arrow`s in the diagram must equal the count of `verify_test`s in the generated tests.
+1. **Design element = Test.** Every `call_arrow` in a sequence diagram becomes exactly one `verify_test`. Every row in a `decision_table_file` becomes exactly one leaf test. The count of design elements must equal the count of generated tests.
 
-2. **Implement from tests, not UML.** The transformation has two phases separated by a wall. Phase 1 (UML → tests) consumes the diagram. Phase 2 (tests → implementation) reads only the tests. The UML is never consulted during implementation. This two-phase wall ensures the implementation structure matches what the tests demand.
-
-### Input
-
-The user's UML sequence diagram:
-
-$ARGUMENTS
-
----
+2. **Implement from tests, not design.** The transformation has two phases separated by a wall. 
+   - Phase 1 (design → tests) consumes the sequence diagrams and decision tables. 
+   - Phase 2 (tests → implementation) reads only the tests. The design is never consulted during implementation. This two-phase wall ensures the implementation structure matches what the tests demand.
 
 ## Concepts
 
 Every later reference uses the exact snake_case name defined here.
 
-### UML Elements
+### Design Inputs
+
+What the human authors. The first artifacts in the chain.
+
+#### UML elements
 
 - **`call_arrow`** — An arrow from caller to callee representing a method invocation. Labeled with a method call: `A -> B: method(arg)`. May appear as solid (`->`) or plain arrow. Identified by its label format: a method name followed by parentheses.
 
@@ -50,27 +45,45 @@ Every later reference uses the exact snake_case name defined here.
 
 - **`throw_arrow`** — A self-arrow (from a `participant` to itself) labeled `<<throws>> ExceptionType`.
 
-### Distinguishing `call_arrow` from `return_arrow`
-
-When arrow styles are identical, use three signals:
+**Distinguishing `call_arrow` from `return_arrow`** — when arrow styles are identical, use three signals:
 
 1. **Label format** — A `call_arrow` has parentheses in its label: `method(arg)`. A `return_arrow` has a value name with no parentheses: `result` or `result : Type`.
 2. **Direction** — A `call_arrow` goes forward (caller to new callee). A `return_arrow` goes back to the original caller.
 3. **Pairing** — A `return_arrow` always follows a `call_arrow` to the same callee and returns to the same caller.
 
-### Participant Roles
+#### Decision-table elements
+
+- **`decision_table_file`** — A `design/<Participant>.decision.md` file with YAML frontmatter (`target`, `input`, `output`, optional `config`) and a markdown table of rows. Specifies the input/output behaviour of a `pure function` leaf. Frontmatter and `config:` keys are documented in the language profile.
+
+### Subject vs collaborator
+
+Classifies each `participant` by its relationship to the test. Determines instantiation vs mocking.
 
 - **`component_under_test`** — The first `participant` in the diagram. Not mocked. Instantiated in tests.
 
 - **`collaborator`** — Any `participant` other than the `component_under_test`. Mocked in tests. Injected into the `component_under_test` via its constructor.
 
+### Composes calls vs terminal
+
+Classifies each `participant` by its relationship to the call graph. Determines test style.
+
 - **`orchestrator`** — A `participant` that has outgoing `call_arrow`s to other participants. DisC dictates its implementation structure: call order, arguments, and data flow are all fixed by tests.
 
-- **`leaf_node`** — A `participant` with no outgoing `call_arrow`s. Its internal algorithm is unconstrained. DisC verifies its correctness via input/output examples, not its structure.
+- **`leaf_node`** — A `participant` with no outgoing `call_arrow`s. Its internal algorithm is unconstrained. DisC verifies its correctness via input/output examples, not its structure. Sub-classified as **`pure function`** (output depends only on inputs), **`side effect`** (touches external systems), or **`factory`** (pass-through to a constructor). The full sub-classification table — including DisC's action per sub-kind — is in the `leaf_node` transformation rule.
 
-### Test Concepts
+### Composition
+
+Derived facts about the design, computed before tests are generated.
 
 - **`interaction`** — One `call_arrow` paired with its optional `return_arrow`. The atomic unit of DisC.
+
+- **`data_pipe`** — A relationship between two consecutive `interaction`s in which the `return_arrow` value of the first becomes an argument of the next.
+
+### Test Outputs
+
+What is generated in Phase 1 (design → tests).
+
+Note: `decision_table` is the *artifact* generated for a `pure function` leaf. `decision_table_file` is the *input* file that may attach to one. They are different concepts on opposite ends of the pipeline.
 
 - **`verify_test`** — A test asserting that a `collaborator` method was called with expected arguments. One `verify_test` per `call_arrow`.
 
@@ -84,21 +97,6 @@ When arrow styles are identical, use three signals:
 
 - **`decision_table`** — A set of input/output examples for a `leaf_node`. Human-designed, not AI-generated. Each row becomes one test with a direct assertion on the return value.
 
-- **`decision_table_file`** — A `design/<Participant>.decision.md` file authored by a human ahead of time. Contains YAML frontmatter (`target: Class.method`, `input:` types, `output:` type, optional `config:`) and a markdown table of rows. When present in the input set, it attaches to its target `pure function` leaf and replaces the default skeleton generation. Format details are in the language profile.
-
-- **`inferred_assumption`** — A judgment call DisC made during implementation that the input (UML + rows + frontmatter) did not uniquely determine. Examples: rounding mode, numeric scale, null-handling, locale. Every `inferred_assumption` is reported in Step 8 so the human can audit. When `config:` in the frontmatter pins a choice, that choice is explicit — not an `inferred_assumption`.
-
-### Data Flow
-
-- **`data_pipe`** — The `return_arrow` value of one `interaction` becomes the argument of the next `interaction`. When a `return_arrow` labels a value `x`, and a subsequent `call_arrow` uses `x` as an argument, those two `interaction`s are connected by a `data_pipe`.
-
-### Exception Handling
-
-- **`throw_placement`** — The rule governing where the method-under-test is called when a `throw_arrow` is present:
-  - **Happy path:** The method is called in setup (before individual tests run).
-  - **Exception path:** The method is called inside the assertion that expects the exception. If the method were called in setup, the exception would abort setup and no assertions would execute.
-
----
 
 ## Transformation Rules
 
@@ -194,7 +192,6 @@ For `pure function` leaves:
 
 **Dual testing rule (pure functions only):** In the consumer's test, a `pure function` leaf is still a mocked `collaborator` with `verify_test`s. It also gets its own standalone `decision_table` test. These serve different purposes: the consumer's test verifies orchestration wiring; the `decision_table` verifies computational correctness. `side effect` and `factory` leaves have no standalone DisC test, so dual testing does not apply.
 
----
 
 ## Constraints
 
@@ -220,15 +217,37 @@ Each test contains exactly one `verify_test` OR one `result_test`. Never both. N
 
 Tests contain no conditionals, no loops, no branching. Tests are declarative: setup executes, then each test verifies one thing.
 
-### `return_arrow` label parsing
+### Prefer explicit return types
 
 Prefer the explicit ` : Type` format over inferring the type from the variable name. Explicit typing eliminates ambiguity and makes the `data_mock` type unambiguous to any reader of the diagram.
+
+### Throw placement
+
+When a `throw_arrow` is present, the method-under-test is called at different places depending on the path:
+
+- **Happy path:** The method is called in setup (before individual tests run).
+- **Exception path:** The method is called inside the assertion that expects the exception. If the method were called in setup, the exception would abort setup and no assertions would execute.
+
+### Required vs optional decisions
+
+A `pure function` leaf has decisions about behaviour that the rows may or may not pin down.
+
+- A **`required_decision`** is one DisC will not silently default. If the rows do not demonstrate it AND `config:` does not pin it, Step 1 refuses.
+- An **`optional_decision`** is one where DisC applies a documented default silently when the rows are silent.
+
+The lists of which specific decisions are `required_decision` vs `optional_decision` — and the default values for each `optional_decision` — are language-specific and enumerated in the language profile. Defaults are documented once in the profile; they are not reported per run. Any default can be overridden via `config:`.
+
+## Input
+
+The design provided by the user:
+
+$ARGUMENTS
 
 ---
 
 ## The Pipeline
 
-Execute these eight steps in order. Each step must be complete before the next begins.
+Execute these eight steps in order. Each step must be complete before the next begins. Report each step using its `### Step N: <name>` heading from below as the section label in your response.
 
 ### Step 1: Validate Inputs
 
@@ -262,6 +281,8 @@ Refuse when:
 - Participant names don't follow naming conventions
 - A `decision_table_file` has missing or malformed frontmatter, undeclared column types, or zero rows
 - A `decision_table_file`'s `target:` does not resolve to a `pure function` leaf in any UML in the input set (see Step 2 pairing)
+- A `decision_table_file` leaves a `required_decision` unspecified AND `config:` does not pin it. The refusal message names the decision and instructs the human to either (a) add a row that demonstrates the choice, or (b) add the corresponding `config:` key (see the language profile for the recognized key for each decision).
+- A `decision_table_file`'s `config:` contains a key not enumerated in the language profile. DisC does not silently ignore unknown keys.
 
 ### Step 2: Classify
 
@@ -337,7 +358,7 @@ Before writing anything, pass every check. Fix generated code if any check fails
 
 **Self-reflection protocol:** Iterate your output until you rate it 10/10 against an internal rubric before proceeding. Do not infer patterns not defined in this methodology.
 
-**Five critical checks:**
+**Four critical checks:**
 
 1. **Arrow parity** — `call_arrow` count == `verify_test` count. Each `stub` has a corresponding `return_arrow`. The `result_test` matches the final return value.
 
@@ -353,16 +374,11 @@ Before writing anything, pass every check. Fix generated code if any check fails
    - `leaf_node`s classified as `pure function`, `side effect`, or `factory`; standalone tests (pure functions only) use direct assertions, not `verify_test`s
    - `decision_table` skeletons marked TODO for human review (only when no `decision_table_file` is attached)
    - Filled decision-table tests have no TODO markers — every row produces a concrete test
+   - For each filled `decision_table_file`, every `required_decision` is either demonstrated by rows or pinned by `config:`. (If it isn't, Step 1 should have refused — this is a belt-and-braces check.)
    - `pure function` leaves both mocked in consumer AND get standalone tests (dual testing); `side effect` and `factory` leaves have no standalone test
    - Each `branch_block` has one `test_group` per branch with branch-specific `stub` setup
    - `loop_block` test data uses single-element collection
    - Primitives/final classes use real values, not mocks
-
-5. **Row density (filled decision tables only, warn-only)** — For each attached `decision_table_file`, collect notes about sparse coverage. This does not block generation; notes are surfaced in Step 8. Flag:
-   - Fewer than 3 rows
-   - Numeric inputs with no row at zero or negative
-   - String inputs with no row for empty string
-   - Output type suggests validation but no exception row is present
 
 ### Step 6: Implement (two-phase wall)
 
@@ -381,24 +397,21 @@ This enforces Invariant 2: implementation matches what tests demand, not what UM
 
 **For `pure function` leaves with a `decision_table_file` attached:**
 
-Before writing implementation, list every choice the rows did not uniquely determine. Examples:
-- Rounding mode (`HALF_UP`, `HALF_EVEN`, `HALF_DOWN`, `CEILING`, `FLOOR`)
-- Numeric scale / precision
-- Null-handling strategy (throw, default, pass-through)
-- Ordering for set-returning or iteration-dependent functions
-- Locale for case-folding, collation, or formatting
-- Whitespace handling beyond what rows demonstrate
+The implementation is a deterministic function of three inputs: the rows, the `config:` block, and the documented `optional_decision` values from the language profile.
 
-Each such choice is recorded as an `inferred_assumption` with: the decision name, the chosen value, and a one-line rationale. When the frontmatter's `config:` block pins a choice (e.g., `rounding: HALF_UP`), use that value and do NOT record an `inferred_assumption` for it — the choice was explicit.
+- Read the rows. They constrain output for every input combination they list.
+- Read `config:`. It pins the value for any decision the rows do not demonstrate.
+- For any `optional_decision` the rows and `config:` are silent on, apply the language profile's documented default.
+- Do NOT make judgment calls on a `required_decision`. If one is unspecified at this point, Step 1 failed to refuse — stop and re-check Step 1, do not paper over it here.
 
-Write the implementation using the chosen values. All `inferred_assumption`s are surfaced in Step 8 for human audit.
+Write the implementation using these values. There is no per-run audit log; the rules are fixed by the methodology and the language profile.
 
 ### Step 7: Write Files
 
 **CREATE mode:** Write tool — complete file.
 **UPDATE mode:** Read tool first, then Edit tool — add only, never modify existing.
 
-> **Never** use the Write tool on an existing file.
+**Never** use the Write tool on an existing file.
 
 **Critical rule:** Existing content is sacred.
 
@@ -416,59 +429,14 @@ Tests:           [N] verify_tests + [R] result_tests = [total] total
 Files:           [CREATE/UPDATE labels per file]
 ```
 
-**Inferred assumptions** (one block per filled `decision_table_file`; omit when none):
-```
-<Class>.<method>:
-  - <decision>: <chosen value> (<one-line rationale>). Verify.
-  - <decision>: <chosen value> (<one-line rationale>). Verify.
-```
-
-**Row density** (one block per filled `decision_table_file`; omit when coverage is adequate):
-```
-<Class>.<method>:
-  - <note> (e.g., "only 2 rows — sparse", "no zero-input row", "no exception row")
-```
-
 **Human verification checklist:**
 1. Count arrows in UML. Count `verify_test`s in test. Must match.
 2. Each `verify_test` argument matches its UML arrow's argument.
 3. Each `stub` matches a `return_arrow`.
 4. For skeleton decision tables: fill in TODO test cases with real business examples.
-5. For filled decision tables: review every `inferred_assumption` and confirm or pin it via `config:` in the frontmatter.
-6. For each row-density note: add rows if the coverage matters for your domain.
 
 **Final steps:**
 1. Write files to disk per file mode
 2. Run the language profile's build command
 3. If tests fail: read error, fix, re-run
 4. Report files and test results
-
----
-
-## File Management Reference
-
-### Domain Type Rule
-
-Any type in an interface method signature that represents a domain concept is generated as an **interface**, not a class. This enforces Dependency Inversion.
-
-**Not domain types (leave as-is):** Primitives/wrappers, standard generics, framework types, boundary carriers (`*Request`, `*Response`, `*DTO`). See the language profile for language-specific exceptions.
-
-> Domain type EXISTS as class: do not convert to interface. Warn in report.
-
----
-
-## Output Format
-
-Structure your response with these section headers:
-
-1. **Step 1: Validate** — Confirm all UML elements supported
-2. **Step 2: Classify** — List elements and classifications
-3. **Step 3: Discover** — Base package, file paths, CREATE/UPDATE modes
-4. **Step 4: Generate** — Files with content:
-   - CREATE: full path + complete content
-   - UPDATE: full path + new content only, labeled "ADD to existing file"
-   - Order: domain types → interfaces → tests → `decision_table` skeletons
-5. **Step 5: Quality Gate** — Show four checks passing
-6. **Step 6: Implement** — Files with content (same CREATE/UPDATE labeling)
-7. **Step 7: Write** — Files written to disk
-8. **Step 8: Report** — Summary + human verification checklist
