@@ -78,7 +78,9 @@ Currently supports **Java** with **UML sequence diagrams** (PlantUML format). Su
 2. Run `/disc 01_hello-world.puml` in Claude Code session
 3. Run `./gradlew test`
 
-## Install Design-Is-Code plugin for Claude Code
+## Use DisC in your own project
+
+> Not needed to browse this demo repo — the steps below are for adopting DisC in your own codebase.
 
 1. Install the plugin in Claude Code ([plugin docs](https://code.claude.com/docs/en/plugins)) in 2 commands:
    ```
@@ -90,7 +92,7 @@ Currently supports **Java** with **UML sequence diagrams** (PlantUML format). Su
 2. Put your UML sequence diagram in your project's `design/` folder
 3. Run `/design-is-code:disc <filename>` in Claude Code
 
-## Uninstall Design-Is-Code plugin for Claude Code
+## Uninstall the plugin
 
 ```
 /plugin uninstall design-is-code@mossgreen-design-is-code
