@@ -1,0 +1,28 @@
+@startuml
+' @package com.disc.order
+OrderService -> CustomerRepository: findById(customerId)
+OrderService <-- CustomerRepository: customer : Customer
+loop for each lineItem in lineItems
+    OrderService -> ProductRepository: findById(lineItem.productId)
+    OrderService <-- ProductRepository: product : Product
+    OrderService -> StockValidator: hasStock(product, lineItem.quantity)
+    OrderService <-- StockValidator: hasStock : Boolean
+    alt [not hasStock]
+        OrderService -> OrderService: <<throws>> InsufficientStockException
+    end
+    OrderService -> LineSubtotalCalculator: calculate(lineItem.quantity, product.unitPrice)
+    OrderService <-- LineSubtotalCalculator: lineSubtotal : BigDecimal
+    OrderService -> ProductRepository: save(product)
+end
+alt [orderTotal exceeds free shipping threshold]
+    OrderService -> OrderFactory: createWithFreeShipping(customer, lineItems, lineSubtotals)
+    OrderService <-- OrderFactory: order : Order
+else [below threshold]
+    OrderService -> ShippingCalculator: calculate(orderTotal, customer.region)
+    OrderService <-- ShippingCalculator: shippingFee : BigDecimal
+    OrderService -> OrderFactory: createWithShipping(customer, lineItems, lineSubtotals, shippingFee)
+    OrderService <-- OrderFactory: order : Order
+end
+OrderService -> OrderRepository: save(order)
+OrderService <-- OrderRepository: savedOrder : Order
+@enduml
