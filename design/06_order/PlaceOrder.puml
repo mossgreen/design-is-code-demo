@@ -1,28 +1,24 @@
 @startuml
 ' @package com.disc.order
 OrderService -> CustomerRepository: findById(customerId)
-OrderService <-- CustomerRepository: customer : Customer
-loop for each lineItem in lineItems
+CustomerRepository --> OrderService: customer : Customer
+loop for each lineItem in orderRequest.lineItems
     OrderService -> ProductRepository: findById(lineItem.productId)
-    OrderService <-- ProductRepository: product : Product
-    OrderService -> StockValidator: hasStock(product, lineItem.quantity)
-    OrderService <-- StockValidator: hasStock : Boolean
+    ProductRepository --> OrderService: product : Product
+    OrderService -> StockValidator: hasStock(product.availableQty, lineItem.quantity)
+    StockValidator --> OrderService: hasStock : Boolean
     alt [not hasStock]
         OrderService -> OrderService: <<throws>> InsufficientStockException
     end
     OrderService -> LineSubtotalCalculator: calculate(lineItem.quantity, product.unitPrice)
-    OrderService <-- LineSubtotalCalculator: lineSubtotal : BigDecimal
-    OrderService -> ProductRepository: save(product)
+    LineSubtotalCalculator --> OrderService: lineSubtotal : BigDecimal
 end
-alt [orderTotal exceeds free shipping threshold]
-    OrderService -> OrderFactory: createWithFreeShipping(customer, lineItems, lineSubtotals)
-    OrderService <-- OrderFactory: order : Order
-else [below threshold]
-    OrderService -> ShippingCalculator: calculate(orderTotal, customer.region)
-    OrderService <-- ShippingCalculator: shippingFee : BigDecimal
-    OrderService -> OrderFactory: createWithShipping(customer, lineItems, lineSubtotals, shippingFee)
-    OrderService <-- OrderFactory: order : Order
-end
+OrderService -> OrderTotalCalculator: calculate(lineSubtotals)
+OrderTotalCalculator --> OrderService: orderTotal : BigDecimal
+OrderService -> ShippingFeeCalculator: calculate(orderTotal, customer.region)
+ShippingFeeCalculator --> OrderService: shippingFee : BigDecimal
+OrderService -> OrderFactory: create(customer, orderRequest, lineSubtotals, shippingFee)
+OrderFactory --> OrderService: order : Order
 OrderService -> OrderRepository: save(order)
-OrderService <-- OrderRepository: savedOrder : Order
+OrderRepository --> OrderService: savedOrder : Order
 @enduml

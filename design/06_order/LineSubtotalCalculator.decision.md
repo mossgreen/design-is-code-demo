@@ -9,6 +9,7 @@ config:
   rounding: HALF_UP
   scale: 2
   nullHandling: throw
+  exceptionType: java.lang.IllegalArgumentException
 ---
 
 | quantity | unitPrice | expected |
