@@ -15,27 +15,28 @@ Every participant in this design is named after the *responsibility it owns*, no
 Reading the business doc as a fresh reader:
 
 - **Nouns surfaced:** customer, order, line item, product, stock, line subtotal, order total, shipping fee, region, threshold, warehouse, confirmation.
-- **Verbs surfaced:** place, look up, check stock, price (a line, an order), apply shipping rule, build, save.
+- **Verbs surfaced:** place, look up, validate stock, price (a line, an order), apply shipping rule, build, save.
 
 ### Filtering — what belongs in *this* feature's bounded context?
 
 Discarded as out-of-context or as attributes of something else:
 
-- **Warehouse** — implementation detail of stock-checking; not surfaced.
+- **Warehouse** — implementation detail of stock-validation; not surfaced.
 - **Confirmation** — a presentation concern, not a domain object.
 - **Threshold** — a *rule inside* the shipping abstraction, not an entity.
 - **Stock** — an attribute of a product (`availableQty`), not a thing of its own.
 
-Domain entities and value types: **Customer, Product, LineItem, Order, OrderRequest.**
+Domain entities and value types: **Customer, Product, LineItem, PricedLineItem, Order, OrderRequest.**
 
 Domain *concepts* — the responsibilities that, if not given homes, end up bloating the orchestrator:
 
-- Stock availability decision
+- Stock validation
 - Line pricing
+- Priced-line construction
 - Order totalling
 - Shipping fee determination
 
-These four are the OOAD-critical ones. Each is a unit of business knowledge. Each will change for one reason. Each deserves a name and a contract.
+Each is a unit of business knowledge. Each will change for one reason. Each deserves a name and a contract.
 
 ### CRC-style responsibility allocation
 
@@ -43,15 +44,16 @@ These four are the OOAD-critical ones. Each is a unit of business knowledge. Eac
 |---|---|
 | Find a customer by id | `CustomerRepository` |
 | Find a product by id | `ProductRepository` |
-| Decide whether stock is sufficient | `StockValidator` |
+| Reject the order if a line is short on stock | `StockValidator` |
 | Compute a line's price | `LineSubtotalCalculator` |
+| Pair a line item with its priced subtotal | `PricedLineItemFactory` |
 | Compute the order's total | `OrderTotalCalculator` |
 | Compute the shipping fee | `ShippingFeeCalculator` |
 | Construct an `Order` from its parts | `OrderFactory` |
 | Persist an `Order` | `OrderRepository` |
 | Coordinate the placement workflow | `OrderService` |
 
-Each row's owner exists because *someone* must hold that knowledge. The orchestrator delegates; it does not compute.
+Each row's owner exists because *someone* must hold that knowledge. The orchestrator delegates; it does not compute, branch, or decide.
 
 ### Change-axis audit (the SRP test)
 
@@ -64,12 +66,13 @@ For each abstraction, the *one* reason it would change:
 | `OrderRepository` | Order storage technology |
 | `StockValidator` | What "available" means (instant stock → reservations → multi-warehouse) |
 | `LineSubtotalCalculator` | Per-line pricing rules (rounding, currency, per-line promos) |
+| `PricedLineItemFactory` | The `PricedLineItem` value type's shape |
 | `OrderTotalCalculator` | How an order's total is composed (sum → sum + tax → sum + tax − discount) |
 | `ShippingFeeCalculator` | Shipping rules (thresholds, regions, promos) |
 | `OrderFactory` | The `Order` object's structural shape |
 | `OrderService` | The placement workflow itself (a step added or removed) |
 
-Nine participants, nine independent change axes, no overlap. That is the SRP check, applied at the *design* level rather than the line-of-code level.
+Ten participants, ten independent change axes, no overlap. That is the SRP check, applied at the *design* level rather than the line-of-code level.
 
 ## Why `OrderTotalCalculator` exists, even though today its body is one line
 
@@ -92,7 +95,28 @@ By contrast, with `OrderTotalCalculator` as a real abstraction, every one of tho
 
 The fact that today's implementation is small is a coincidence of the moment; the fact that order-total composition is its own change axis is a permanent property of the domain. We design to the permanent property, not the coincidence.
 
-This was the discipline I applied to `ShippingFeeCalculator` (where the threshold and region rules clearly belong inside) and the same discipline applies here. Consistency with itself is part of a design's quality.
+## Why `PricedLineItem` exists as its own value type
+
+A naïve design would pass two parallel lists to the order factory: `lineItems` and `lineSubtotals`, correlated by index. That is fragile (mismatched lengths, off-by-one zips) and OOAD-poor (the relationship between a line and its price is invisible to the type system).
+
+`PricedLineItem` is the **named pair**: a `LineItem` together with its computed `BigDecimal` subtotal. The two cannot exist apart in this domain — a priced line *is* the line plus its price. Surfacing that as a value type:
+
+- Makes the order's shape honest: an order is `(customer, list of priced lines, shipping fee)` — three coherent things, no parallel anything.
+- Eliminates the "trust the factory to zip correctly" failure mode by construction.
+- Gives a stable place to add per-line metadata later (per-line discount, tax, line note) without re-shaping the factory call.
+
+Construction is its own responsibility (`PricedLineItemFactory`), so the orchestrator doesn't perform domain construction inline. This is the same discipline applied to `OrderFactory`: factories do construction, orchestrators do orchestration.
+
+## Why `StockValidator` throws instead of returning a Boolean
+
+An earlier version of this design returned a `Boolean` from the validator and let the orchestrator decide whether to throw. That version had two problems:
+
+1. The validator knew *the rule for "is there enough stock"* but the orchestrator knew *what to do when not*. Two parts of one responsibility, in two places.
+2. The orchestrator carried an `if (not hasStock) throw` — control flow that is really a *validation rule*, leaking out of the validator.
+
+Renaming `hasStock` (a question) to `validate` (an imperative) and giving it `void` return + thrown exception fixes both. The validator owns the rule end-to-end. The orchestrator simply *calls* `validate(...)` — no `if`, no branch, no decision. The diagram has no `alt` block; the loop body is a clean linear sequence.
+
+This is OOAD doing real work: naming the responsibility (*"validate"*) determines the interface shape, and the interface shape eliminates a structural complication in the caller.
 
 ## Why no `PricingStrategy`, `ShippingPolicy`, or `OrderValidator`
 
@@ -114,23 +138,6 @@ This collapses what would have been a top-level `branch_block` into a clean line
 
 This is OCP applied where it actually pays — at a real change axis, not as theatre.
 
-## Why the throw lives inside the loop
-
-The business rule is *fail-fast on first short line, do not partially fulfil*. The diagram expresses that rule directly: the moment a line fails stock, an exception fires. No state is accumulated, no rollback is needed, no "rejected lines" list is built up. The simplest semantics that match the business rule.
-
-The cost is structural: this nests `loop + alt + throw`, a combination not exemplified in the existing skill examples. The fallback if DisC trips on it is to lift validation into a pre-loop pass — but that pre-loop pass would re-fetch products, or carry state, and either way it would be a worse expression of the rule. We accept the structural complexity in exchange for semantic honesty.
-
-## Acknowledged compromise: parallel `lineItems` / `lineSubtotals` lists
-
-The factory takes `(customer, orderRequest, lineSubtotals, shippingFee)`. That implies the factory zips `orderRequest.lineItems` against `lineSubtotals` by index — fragile, OOAD-imperfect.
-
-The OOAD-correct fix is a `PricedLineItem` value type plus its construction step. We are choosing **not** to make that fix here, for two reasons:
-
-1. Consistency with 05_sale, which uses the same convention. Mixing conventions inside a small demo would be more confusing than the wart.
-2. Right-time discipline: the demo's purpose is to introduce the throw and the multi-leaf composition pattern. Bundling a `PricedLineItem` introduction into the same step would mix two unrelated lessons.
-
-This is a real wart. We are flagging it here so it is acknowledged rather than hidden. Cleaning it up belongs in a follow-up refactor that touches both 05 and 06 together.
-
 ## A note on `OrderTotalCalculator`'s decision-table absence
 
 `OrderTotalCalculator.calculate(lineSubtotals)` takes a `List<BigDecimal>`. Decision tables in this skill have no syntax for a list-typed input column, so this leaf is left in **skeleton mode** — DisC will scaffold a TODO test class for the human to fill.
@@ -141,8 +148,8 @@ If, later, the skill grows a list-input syntax, this leaf gets a filled decision
 
 ## Summary
 
-Nine participants. One orchestrator, three side-effect repositories, three pure-function leaves with decision tables, one pure-function leaf in skeleton mode, one factory. Each named for a permanent responsibility in the domain. No top-level branching. One nested guard-clause exception. One loop.
+Ten participants. One orchestrator, three side-effect repositories, three pure-function leaves with decision tables, one pure-function leaf in skeleton mode, two factories. Each named for a permanent responsibility in the domain. No top-level branching. No `alt` block in the orchestrator. One throw, owned by the validator that decides on it. One loop with a clean linear body.
 
-The design will survive: a change to stock semantics, a new pricing rule, a new shipping region, a tax requirement, a discount feature, a switch of database — *each one of these is a single-implementation change with no ripple into the orchestrator or its tests*.
+The design will survive: a change to stock semantics, a new pricing rule, a new shipping region, a tax requirement, a discount feature, the addition of per-line metadata, a switch of database — *each one of these is a single-implementation change with no ripple into the orchestrator or its tests*.
 
 That is what the abstractions buy. That is why they are here.

@@ -5,19 +5,17 @@ CustomerRepository --> OrderService: customer : Customer
 loop for each lineItem in orderRequest.lineItems
     OrderService -> ProductRepository: findById(lineItem.productId)
     ProductRepository --> OrderService: product : Product
-    OrderService -> StockValidator: hasStock(product.availableQty, lineItem.quantity)
-    StockValidator --> OrderService: hasStock : Boolean
-    alt [not hasStock]
-        OrderService -> OrderService: <<throws>> InsufficientStockException
-    end
+    OrderService -> StockValidator: validate(product.availableQty, lineItem.quantity)
     OrderService -> LineSubtotalCalculator: calculate(lineItem.quantity, product.unitPrice)
     LineSubtotalCalculator --> OrderService: lineSubtotal : BigDecimal
+    OrderService -> PricedLineItemFactory: create(lineItem, lineSubtotal)
+    PricedLineItemFactory --> OrderService: pricedLineItem : PricedLineItem
 end
 OrderService -> OrderTotalCalculator: calculate(lineSubtotals)
 OrderTotalCalculator --> OrderService: orderTotal : BigDecimal
 OrderService -> ShippingFeeCalculator: calculate(orderTotal, customer.region)
 ShippingFeeCalculator --> OrderService: shippingFee : BigDecimal
-OrderService -> OrderFactory: create(customer, orderRequest, lineSubtotals, shippingFee)
+OrderService -> OrderFactory: create(customer, pricedLineItems, shippingFee)
 OrderFactory --> OrderService: order : Order
 OrderService -> OrderRepository: save(order)
 OrderRepository --> OrderService: savedOrder : Order
