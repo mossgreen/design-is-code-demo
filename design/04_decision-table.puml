@@ -1,4 +1,5 @@
 @startuml
+' @package com.disc.decision
 PricingService -> CustomerRepository: findTier(customerId)
 PricingService <-- CustomerRepository: tier: Tier
 PricingService -> DiscountCalculator: calculate(amount, tier)

@@ -1,5 +1,6 @@
 ---
 target: LineSubtotalCalculator.calculate
+package: com.disc.sale
 input:
   quantity: Integer
   unitPrice: BigDecimal

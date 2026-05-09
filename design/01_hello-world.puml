@@ -1,4 +1,5 @@
 @startuml
+' @package com.disc.hello
 GreetingService -> GreetingFactory: create(userName)
 GreetingService <-- GreetingFactory: greeting: Greeting
 @enduml

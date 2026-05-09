@@ -1,5 +1,6 @@
 ---
 target: DiscountCalculator.calculate
+package: com.disc.decision
 input:
   amount: BigDecimal
   tier: Tier

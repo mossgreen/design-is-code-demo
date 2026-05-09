@@ -1,4 +1,5 @@
 @startuml
+' @package com.disc.loop
 InvoiceService -> OrderRepository: findAllByCustomerId(customerId)
 InvoiceService <-- OrderRepository: orders: List<Order>
 InvoiceService -> InvoiceBuilderFactory: create()

@@ -1,4 +1,5 @@
 @startuml
+' @package com.disc.branching
 OrderService -> OrderRepository: findByOrderId(orderId)
 OrderRepository --> OrderService: result: Optional<Order>
 alt [result.isEmpty()]

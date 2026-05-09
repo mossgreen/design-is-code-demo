@@ -1,5 +1,6 @@
 ---
 target: BulkDiscountCalculator.calculate
+package: com.disc.sale
 input:
   quantity: Integer
   lineSubtotal: BigDecimal
