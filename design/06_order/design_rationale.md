@@ -6,7 +6,7 @@ This document explains *why the design looks the way it does*. The business doc 
 
 > **Software engineering is about abstractions, not implementations.** An interface exists to encapsulate a *responsibility*, not to wrap today's code. When tomorrow brings a different way of computing the same thing, we replace the implementation; the interface — and every caller of it — stays still.
 
-Every participant in this design is named after the *responsibility it owns*, not the *code currently behind it*. Where this conflicts with the urge to "just inline that one line of arithmetic," the urge loses.
+Every participant in this design is named after the *responsibility it owns*, not the *code currently behind it*.
 
 ## OOAD walkthrough
 
@@ -32,8 +32,7 @@ Domain *concepts* — the responsibilities that, if not given homes, end up bloa
 
 - Stock validation
 - Line pricing
-- Priced-line construction
-- Order totalling
+- Order assembly (accumulating priced lines, exposing the running subtotal sum, finalising with a shipping fee)
 - Shipping fee determination
 
 Each is a unit of business knowledge. Each will change for one reason. Each deserves a name and a contract.
@@ -46,14 +45,14 @@ Each is a unit of business knowledge. Each will change for one reason. Each dese
 | Find a product by id | `ProductRepository` |
 | Reject the order if a line is short on stock | `StockValidator` |
 | Compute a line's price | `LineSubtotalCalculator` |
-| Pair a line item with its priced subtotal | `PricedLineItemFactory` |
-| Compute the order's total | `OrderTotalCalculator` |
+| Mint an order builder for a customer | `OrderBuilderFactory` |
+| Accumulate priced lines and emit the constructed `Order` | `OrderBuilder` |
+| Answer questions about its own state (subtotal, total) and accept a shipping fee | `Order` (entity, returned from `OrderBuilder.build()`) |
 | Compute the shipping fee | `ShippingFeeCalculator` |
-| Construct an `Order` from its parts | `OrderFactory` |
 | Persist an `Order` | `OrderRepository` |
 | Coordinate the placement workflow | `OrderService` |
 
-Each row's owner exists because *someone* must hold that knowledge. The orchestrator delegates; it does not compute, branch, or decide.
+The orchestrator delegates; it does not compute, branch, or decide.
 
 ### Change-axis audit (the SRP test)
 
@@ -66,63 +65,96 @@ For each abstraction, the *one* reason it would change:
 | `OrderRepository` | Order storage technology |
 | `StockValidator` | What "available" means (instant stock → reservations → multi-warehouse) |
 | `LineSubtotalCalculator` | Per-line pricing rules (rounding, currency, per-line promos) |
-| `PricedLineItemFactory` | The `PricedLineItem` value type's shape |
-| `OrderTotalCalculator` | How an order's total is composed (sum → sum + tax → sum + tax − discount) |
+| `OrderBuilderFactory` | How a fresh builder is initialised for a customer |
+| `OrderBuilder` | How an order is assembled — what `addLine` accepts, what `build` produces |
+| `Order` | What an order knows about itself — its lines, its subtotal, its shipping fee, its total |
 | `ShippingFeeCalculator` | Shipping rules (thresholds, regions, promos) |
-| `OrderFactory` | The `Order` object's structural shape |
 | `OrderService` | The placement workflow itself (a step added or removed) |
 
-Ten participants, ten independent change axes, no overlap. That is the SRP check, applied at the *design* level rather than the line-of-code level.
+Each participant has one independent change axis, no overlap.
 
-## Why `OrderTotalCalculator` exists, even though today its body is one line
+## Why an `OrderBuilder`, not a parallel-list factory
 
-This is the abstraction that most often gets prematurely inlined, so it deserves a direct defence.
+An earlier draft of this design used the convention 05_sale relies on: the loop returns `lineSubtotal` (singular) per iteration, and the post-loop scope refers to `lineSubtotals` (plural) as if a list had been collected. That convention is *not stated* in the DisC SKILL — it is a tacit reading of "loop returns become a post-loop list" — and it has a real cost: the assembly of the plural is invisible to the diagram and unconstrained by the orchestrator's tests. The orchestrator could pass a wrong, empty, or reordered list and the test would not catch it.
 
-The interface name is `OrderTotalCalculator`. Its responsibility is **owning how an order's total is composed**. Today's composition rule is `Σ lineSubtotals`. Tomorrow's plausible compositions:
+The builder pattern makes the assembly explicit and verifiable:
 
-- `Σ lineSubtotals + tax`
-- `Σ lineSubtotals − orderLevelDiscount`
-- `Σ lineSubtotals − loyaltyCredit + tax`
-- `Σ lineSubtotals − giftCardCredit, capped at zero`
+- **State accumulates inside a real participant.** `OrderBuilder.addLine(lineItem, lineSubtotal)` is a `verify_test` per loop iteration — the test pins down that the orchestrator added each line with the correct values.
+- **The post-loop value is a real return arrow.** `OrderBuilder.subtotalsSum() → orderTotal` and `OrderBuilder.build(shippingFee) → order` are both bound returns. There is no plural-from-loop convention; there is no ghost variable.
+- **Domain coherence.** "An order is a thing being assembled" is closer to how the domain actually works than "an order is a tuple of parallel lists handed to a factory." The builder owns its in-progress state — exactly what builders are for.
 
-If we inline today's one-line sum into the orchestrator, every one of those changes forces:
+The corpus already has this pattern: see [03_loop.puml](../03_loop.puml), where `InvoiceBuilder.addLine(order)` is the per-iteration call and `InvoiceBuilder.build()` returns the assembled invoice. This design composes the same shape with decision-table leaves and a throw-arrow validator.
 
-1. The orchestrator to grow new logic.
-2. Every test of the orchestrator to be re-derived.
-3. The "place an order" workflow to re-prove itself end-to-end for what is really a *pricing* change.
+## Why `OrderBuilderFactory.create(customer)` takes a customer
 
-By contrast, with `OrderTotalCalculator` as a real abstraction, every one of those changes is **isolated to its implementation**. The orchestrator does not move. Its tests do not move. The change axis stays where it belongs.
+A reader could reasonably ask: *isn't a factory's job pure construction? Shouldn't `create()` take no args, and the customer be set via a separate `withCustomer(customer)` method on the builder?*
 
-The fact that today's implementation is small is a coincidence of the moment; the fact that order-total composition is its own change axis is a permanent property of the domain. We design to the permanent property, not the coincidence.
+The answer is no, and the reason is a distinction that matters in OOAD: **a factory's job is to construct a *valid* instance, not a *generic empty* one.**
 
-## Why `PricedLineItem` exists as its own value type
+- `Customer` requires a name to be valid; a name-less `Customer` is not a domain state.
+- `Address` requires a street; a street-less `Address` is not a domain state.
+- `OrderBuilder` requires a customer to be valid, because an "order in progress" is conceptually *for somebody*. An order-being-assembled with no owner is not a meaningful domain state — there is no real-world stage at which Bob's order has not yet been assigned to anyone.
 
-A naïve design would pass two parallel lists to the order factory: `lineItems` and `lineSubtotals`, correlated by index. That is fragile (mismatched lengths, off-by-one zips) and OOAD-poor (the relationship between a line and its price is invisible to the type system).
+By that reading, `customer` is the builder's **identity at birth**, not a field that happens to be set first. The factory's signature `create(customer)` is doing one thing — minting a valid builder — and the customer is what *makes* it valid.
 
-`PricedLineItem` is the **named pair**: a `LineItem` together with its computed `BigDecimal` subtotal. The two cannot exist apart in this domain — a priced line *is* the line plus its price. Surfacing that as a value type:
+**Contrast with [03_loop.puml](../03_loop.puml).** There, `InvoiceBuilderFactory.create()` takes no args because the invoice in that domain has no identity at construction time — it is just an aggregator of orders. Different domains, different valid initial states, different factory signatures. The corpus is consistent if read as *"factory args = the minimum required for the constructed thing to be valid."*
 
-- Makes the order's shape honest: an order is `(customer, list of priced lines, shipping fee)` — three coherent things, no parallel anything.
-- Eliminates the "trust the factory to zip correctly" failure mode by construction.
-- Gives a stable place to add per-line metadata later (per-line discount, tax, line note) without re-shaping the factory call.
+**Why the alternative (`create()` + `withCustomer(customer)`) is worse.** It allows an `OrderBuilder` instance to exist in a customer-less state, which is invalid in this domain. It privileges a generic methodology principle ("factories take no args") over the domain principle ("make invalid states unrepresentable"). The latter wins: the interface that cannot express invalid states is the interface that cannot be misused.
 
-Construction is its own responsibility (`PricedLineItemFactory`), so the orchestrator doesn't perform domain construction inline. This is the same discipline applied to `OrderFactory`: factories do construction, orchestrators do orchestration.
+The line to draw: a factory taking *the identity required for validity* is fine; a factory taking *arbitrary mutable configuration* (e.g., `create(customer, region, threshold, …)`) is not — that conflates construction with configuration, and the configuration parts belong on the constructed object as state mutations.
+
+## Why `build()` takes no arguments
+
+A `build()` method is a *commit*. It says: *"I have told you everything; now produce the result."* Every other method on the builder exists to feed `build()`. If `build()` itself takes a parameter, then `build()` is doing two things — accepting one last input AND finalising — which is the exact role-overloading we are otherwise careful to avoid.
+
+The universal builder-pattern convention reflects this: `StringBuilder.toString()`, Lombok `@Builder.build()`, Java's `Stream.collect(...)` — none take new state at the commit step. Inputs go in via setters and `add` methods; the commit step takes nothing.
+
+Concretely, an earlier draft had `build(shippingFee) → order`. That was lazy interface design: the shipping fee deserved its own arrival path, not a parameter on the commit. The current shape is `build()` with no arguments — the constructed `Order` arrives ready to be queried for its subtotal so that shipping can be computed and applied.
+
+## Why `subtotal()` lives on `Order`, not on the builder
+
+The subtotal is *the sum of an order's line subtotals*. It is, by definition, a property of the order — a number you can derive from the order's lines whenever you have the order in hand.
+
+An earlier draft put `subtotalsSum()` on the builder, so the orchestrator could query the in-progress sum before shipping was decided. That had two problems:
+
+1. **The builder grew a query method**, which conflicts with the textbook builder lifecycle (write-only until commit). Builders are asymmetric — every method exists to feed `build()` — and a query that does not feed `build()` is a leak of responsibility.
+2. **The sum is a property of the order, not of the assembly process.** It is not "a number the builder happens to maintain"; it is "a fact about an order's lines." Whichever object owns the lines should own the question.
+
+Putting `subtotal()` on `Order` matches the data: the lines live on the order, so the question lives on the order. The builder is now write-only (`addLine` only), which restores its textbook shape.
+
+## Why `Order.applyShipping(shippingFee)` is a mutator (and what we accept by allowing it)
+
+The shipping fee depends on the order's subtotal, which depends on the order's lines, which are only fully known after the loop. So the fee cannot be passed to `build()` (we want `build()` to take nothing) and it cannot live on the builder (the builder has emitted the order and is done). The remaining honest options are:
+
+1. **`Order` is constructed without shipping and accepts it later via a mutator** (`order.applyShipping(fee)`). The order is mutable for one specific transition: from "lines settled, shipping unset" to "fully priced." Chosen.
+2. **A separate `OrderDraft` value type represents the lines-settled-but-shipping-unknown phase**, and a `finalise(fee) → Order` step produces an immutable `Order`. Cleaner — no mutation, no invalid states — but introduces a new domain concept (`OrderDraft`) that the shop does not natively name.
+3. **`build(shippingFee)` takes the fee.** Rejected (see preceding section).
+
+We chose option 1 to keep the participant count flat and avoid adding a domain type whose only purpose is to make the `Order`'s lifecycle a chain of immutable values rather than a brief mutable interval.
+
+**What we accept by choosing the mutator:**
+
+- `Order` is mutable in one specific window — between `build()` and `applyShipping(...)`. During that window, calling `subtotal()` is valid; calling `total()` (subtotal + shipping) is not yet meaningful; saving the order is incorrect. The interface allows these mistakes; the implementation must guard against them, or the workflow must be trusted not to make them. The orchestrator's tests pin down the *correct* sequence (`build → subtotal → calculate shipping → applyShipping → save`) so the contract is enforced by the workflow, not by the type.
+- The order's lifecycle is partially encoded in convention rather than in the type system. A more rigorous design would represent the two phases as two types (option 2 above). We are choosing convention here for compactness; if `Order`'s lifecycle grows new partial phases (e.g., partial payment, partial fulfilment), the right move is to revisit and split the type.
+
+This is OOAD doing honest accounting: **we name the cost of the chosen shape so a future reader understands what was traded for compactness.**
 
 ## Why `StockValidator` throws instead of returning a Boolean
 
-An earlier version of this design returned a `Boolean` from the validator and let the orchestrator decide whether to throw. That version had two problems:
+An earlier draft returned `Boolean` and let the orchestrator decide whether to throw. That version had two problems:
 
 1. The validator knew *the rule for "is there enough stock"* but the orchestrator knew *what to do when not*. Two parts of one responsibility, in two places.
 2. The orchestrator carried an `if (not hasStock) throw` — control flow that is really a *validation rule*, leaking out of the validator.
 
-Renaming `hasStock` (a question) to `validate` (an imperative) and giving it `void` return + thrown exception fixes both. The validator owns the rule end-to-end. The orchestrator simply *calls* `validate(...)` — no `if`, no branch, no decision. The diagram has no `alt` block; the loop body is a clean linear sequence.
+Renaming `hasStock` (a question) to `validate` (an imperative) and giving it `void` return + thrown exception fixes both. The validator owns the rule end-to-end. The orchestrator simply *calls* `validate(...)`. The diagram has no `alt` block; the loop body is a clean linear sequence.
 
 This is OOAD doing real work: naming the responsibility (*"validate"*) determines the interface shape, and the interface shape eliminates a structural complication in the caller.
 
 ## Why no `PricingStrategy`, `ShippingPolicy`, or `OrderValidator`
 
-The temptation in mid-complexity systems is to invent strategy interfaces "in case" multiple implementations appear. That is speculative generality and it is a worse failure than the one above.
+The temptation in mid-complexity systems is to invent strategy interfaces "in case" multiple implementations appear. That is speculative generality.
 
-- **`PricingStrategy`** — would have one implementation. Decision tables already express the strategy declaratively. No.
+- **`PricingStrategy`** — would have one implementation. Decision tables already express the strategy declaratively.
 - **`ShippingPolicy`** — same. The strategy *is* the rows in `ShippingFeeCalculator.decision.md`.
 - **`OrderValidator`** — stock validation is the only validation. A separate validator on top of `StockValidator` would be a wrapper around a single method.
 
@@ -138,17 +170,9 @@ This collapses what would have been a top-level `branch_block` into a clean line
 
 This is OCP applied where it actually pays — at a real change axis, not as theatre.
 
-## A note on `OrderTotalCalculator`'s decision-table absence
-
-`OrderTotalCalculator.calculate(lineSubtotals)` takes a `List<BigDecimal>`. Decision tables in this skill have no syntax for a list-typed input column, so this leaf is left in **skeleton mode** — DisC will scaffold a TODO test class for the human to fill.
-
-This is a question of *how the implementation is proven*, not *whether the abstraction is justified*. The interface is defended on responsibility grounds above; the skeleton is a small testing-mechanics tax. We do **not** dissolve the abstraction to dodge a tooling limitation. That would be the implementation tail wagging the design dog.
-
-If, later, the skill grows a list-input syntax, this leaf gets a filled decision table and the skeleton goes away. The interface itself — and every caller of it — stays exactly as it is. That is what a well-placed abstraction buys you.
-
 ## Summary
 
-Ten participants. One orchestrator, three side-effect repositories, three pure-function leaves with decision tables, one pure-function leaf in skeleton mode, two factories. Each named for a permanent responsibility in the domain. No top-level branching. No `alt` block in the orchestrator. One throw, owned by the validator that decides on it. One loop with a clean linear body.
+One orchestrator, three side-effect repositories, three pure-function leaves with decision tables, one builder factory, one write-only builder, and one entity (`Order`) that knows its own subtotal and accepts its shipping fee. Each named for a permanent responsibility in the domain. No top-level branching. No `alt` block in the orchestrator. One throw, owned by the validator that decides on it. One loop with a clean linear body. Every value on the wire is bound to a return arrow or to an input.
 
 The design will survive: a change to stock semantics, a new pricing rule, a new shipping region, a tax requirement, a discount feature, the addition of per-line metadata, a switch of database — *each one of these is a single-implementation change with no ripple into the orchestrator or its tests*.
 

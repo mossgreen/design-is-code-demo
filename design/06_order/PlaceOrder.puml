@@ -1,22 +1,24 @@
 @startuml
 ' @package com.disc.order
 OrderService -> CustomerRepository: findById(customerId)
-CustomerRepository --> OrderService: customer : Customer
+OrderService <-- CustomerRepository: customer : Customer
+OrderService -> OrderBuilderFactory: create(customer)
+OrderService <-- OrderBuilderFactory: orderBuilder : OrderBuilder
 loop for each lineItem in orderRequest.lineItems
     OrderService -> ProductRepository: findById(lineItem.productId)
-    ProductRepository --> OrderService: product : Product
+    OrderService <-- ProductRepository: product : Product
     OrderService -> StockValidator: validate(product.availableQty, lineItem.quantity)
     OrderService -> LineSubtotalCalculator: calculate(lineItem.quantity, product.unitPrice)
-    LineSubtotalCalculator --> OrderService: lineSubtotal : BigDecimal
-    OrderService -> PricedLineItemFactory: create(lineItem, lineSubtotal)
-    PricedLineItemFactory --> OrderService: pricedLineItem : PricedLineItem
+    OrderService <-- LineSubtotalCalculator: lineSubtotal : BigDecimal
+    OrderService -> OrderBuilder: addLine(lineItem, lineSubtotal)
 end
-OrderService -> OrderTotalCalculator: calculate(lineSubtotals)
-OrderTotalCalculator --> OrderService: orderTotal : BigDecimal
+OrderService -> OrderBuilder: build()
+OrderService <-- OrderBuilder: order : Order
+OrderService -> Order: subtotal()
+OrderService <-- Order: orderTotal : BigDecimal
 OrderService -> ShippingFeeCalculator: calculate(orderTotal, customer.region)
-ShippingFeeCalculator --> OrderService: shippingFee : BigDecimal
-OrderService -> OrderFactory: create(customer, pricedLineItems, shippingFee)
-OrderFactory --> OrderService: order : Order
+OrderService <-- ShippingFeeCalculator: shippingFee : BigDecimal
+OrderService -> Order: applyShipping(shippingFee)
 OrderService -> OrderRepository: save(order)
-OrderRepository --> OrderService: savedOrder : Order
+OrderService <-- OrderRepository: savedOrder : Order
 @enduml
